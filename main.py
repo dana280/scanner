@@ -2,22 +2,29 @@ import os, json, base64
 from flask import Flask, request, jsonify, Response
 import requests
 
-# ---- ההגדרות היחידות שצריך ----
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")   # מוזן ב-Railway כמשתנה סביבה
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")          # אפשר לשנות לדגם חד יותר אם תרצי
-# --------------------------------
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 app = Flask(__name__)
 
 PROMPT = (
-    "את/ה עוזר/ת לחנות ספרי לימוד בישראל לבנות רשימת מלאי מתוך תמונת מדף.\n"
-    "חשוב מאוד: הטקסט על שדרות הספרים מופיע לעיתים מסובב - אנכי, על הצד, או הפוך. "
-    "קרא/י אותו בכל זווית. אל תוותר/י בגלל זווית.\n"
-    "זהה/י כל ספר/כותר נפרד שנראה (קרא/י שדרות וכריכות בעברית, כולל ניקוד).\n"
-    "החזר/י אך ורק מערך JSON תקין, בלי טקסט נוסף, בלי גדרות קוד, בלי הסבר.\n"
-    "כל פריט: \"name\" (שם הספר), \"subject\" (מקצוע/סוג), \"grade\" (כיתה), "
-    "\"publisher\" (הוצאה), \"count\" (מספר עותקים נראים, מספר), \"notes\" (הערה קצרה או \"\").\n"
-    "אחד/י עותקים זהים לשורה אחת עם count. ערכים בעברית. \"\" אם לא ידוע. אם אין ספרים, החזר/י []."
+    "Ata ozer le-chanut sifrey limud. Build inventory from a shelf photo. "
+    "Read all instructions below carefully and answer in Hebrew values.\n"
+    "Identify every distinct book title visible. Spine text may appear rotated "
+    "(vertical, sideways, upside down) - read it in any orientation.\n"
+    "IRON RULE - accuracy over completeness:\n"
+    "1) Only write text you actually read clearly. If a spine is unreadable or you "
+    "are unsure of the title, put in 'name' only what you are certain of, or the "
+    "Hebrew words 'lo barur', and leave subject, grade and publisher empty. NEVER "
+    "invent a name, subject or publisher that is not written in the image.\n"
+    "2) count: count HOW MANY TIMES this exact title text appears on separate visible "
+    "book spines/copies in the image (count the occurrences of the title text). Count "
+    "each distinct physical copy once - do NOT double-count the same book if its title "
+    "shows on both its spine and its cover. Count only what is visible; do not add hidden "
+    "copies. If unsure, give the lower, safe number.\n"
+    "Return ONLY a valid JSON array, no extra text, no code fences, no explanation.\n"
+    "Each item keys: \"name\", \"subject\", \"grade\", \"publisher\", \"count\" (number), "
+    "\"notes\" (short or \"\"). All values in Hebrew. \"\" if unknown. If no books, return []."
 )
 
 def parse_books(text):
@@ -49,7 +56,7 @@ def index():
 @app.route("/scan", methods=["POST"])
 def scan():
     if not OPENAI_API_KEY:
-        return jsonify({"error": "missing_key", "msg": "חסר מפתח API. הוסיפי OPENAI_API_KEY ב-Railway."}), 500
+        return jsonify({"error": "missing_key", "msg": "Missing OPENAI_API_KEY in Railway."}), 500
     data = request.get_json(silent=True) or {}
     b64 = data.get("image", "")
     if not b64:
@@ -59,19 +66,21 @@ def scan():
         "max_tokens": 1500,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64, "detail": "high"}}
         ]}]
     }
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            headers={"Authorization": "Bearer " + OPENAI_API_KEY, "Content-Type": "application/json"},
             json=payload, timeout=90)
         if r.status_code != 200:
+            print("OPENAI ERROR:", r.status_code, r.text[:500], flush=True)
             return jsonify({"error": "api", "msg": r.text[:300]}), 502
         txt = r.json()["choices"][0]["message"]["content"]
         return jsonify({"books": parse_books(txt)})
     except Exception as ex:
+        print("SERVER ERROR:", str(ex), flush=True)
         return jsonify({"error": "server", "msg": str(ex)[:300]}), 500
 
 HTML = r"""<!DOCTYPE html>
@@ -157,7 +166,7 @@ HTML = r"""<!DOCTYPE html>
     </div>
     <input type="file" id="file" accept="image/*" multiple capture="environment">
     <div class="queue" id="queue"></div>
-    <div class="note">💡 ה־AI קורא שמות ספרים <b>בכל זווית</b> (גם הפוך). ה<b>כמות</b> היא שדרות נראות בלבד — לאמת בעין.</div>
+    <div class="note">💡 ה־AI קורא שמות ספרים <b>בכל זווית</b> ולא ממציא — מה שלא קריא יסומן "לא ברור". ה<b>כמות</b> היא שדרות נראות בלבד — לאמת בעין.</div>
   </div>
 
   <div class="card">
@@ -197,9 +206,9 @@ async function prepareImage(file){
   let bmp,w,h;
   try{bmp=await createImageBitmap(file,{imageOrientation:'from-image'});w=bmp.width;h=bmp.height;}
   catch(e){bmp=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('x'));i.src=URL.createObjectURL(file);});w=bmp.naturalWidth;h=bmp.naturalHeight;}
-  const max=1280,scale=Math.min(1,max/Math.max(w,h)),cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
+  const max=1400,scale=Math.min(1,max/Math.max(w,h)),cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
   const c=document.createElement('canvas');c.width=cw;c.height=ch;c.getContext('2d').drawImage(bmp,0,0,cw,ch);
-  return c.toDataURL('image/jpeg',0.82).split(',')[1];
+  return c.toDataURL('image/jpeg',0.85).split(',')[1];
 }
 async function processImage(file){
   const loc=$('#loc').value.trim();
