@@ -10,8 +10,11 @@ app = Flask(__name__)
 PROMPT = (
     "Ata ozer le-chanut sifrey limud. Build inventory from a shelf photo. "
     "Read all instructions below carefully and answer in Hebrew values.\n"
-    "Identify every distinct book title visible. Spine text may appear rotated "
-    "(vertical, sideways, upside down) - read it in any orientation.\n"
+    "Identify EVERY distinct book title visible, INCLUDING a single lone copy and books "
+    "at the edges of the photo. Do NOT skip a unique single book or merge it into a "
+    "nearby group of different books - list each distinct title as its own row even if "
+    "it has only one copy. Spine text may appear rotated (vertical, sideways, upside "
+    "down) - read it in any orientation.\n"
     "IRON RULE - accuracy over completeness:\n"
     "1) Only write text you actually read clearly. If a spine is unreadable or you "
     "are unsure of the title, put in 'name' only what you are certain of, or the "
