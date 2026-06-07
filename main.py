@@ -8,26 +8,28 @@ MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 app = Flask(__name__)
 
 PROMPT = (
-    "Ata ozer le-chanut sifrey limud. Build inventory from a shelf photo. "
-    "Read all instructions below carefully and answer in Hebrew values.\n"
-    "Identify EVERY distinct book title visible, INCLUDING a single lone copy and books "
-    "at the edges of the photo. Do NOT skip a unique single book or merge it into a "
-    "nearby group of different books - list each distinct title as its own row even if "
-    "it has only one copy. Spine text may appear rotated (vertical, sideways, upside "
-    "down) - read it in any orientation.\n"
+    "You are given the SAME bookshelf in up to 4 images that are the identical photo ROTATED "
+    "to different orientations (0, 90, 180, 270 degrees). It is ONE shelf with ONE set of books. "
+    "The rotations exist ONLY to help you read spine text that may be sideways or upside down - "
+    "read whichever rotation makes each title clearly legible. Return each distinct book ONCE; do "
+    "NOT multiply counts by the number of images and do NOT add a copy per rotation.\n"
+    "You help a Hebrew textbook store build an inventory.\n"
+    "Identify EVERY distinct book title visible, INCLUDING a single lone copy and books at the "
+    "edges. Do NOT skip a unique single book or merge it into a nearby group of different books - "
+    "list each distinct title as its own row even if it has only one copy.\n"
     "IRON RULE - accuracy over completeness:\n"
-    "1) Only write text you actually read clearly. If a spine is unreadable or you "
-    "are unsure of the title, put in 'name' only what you are certain of, or the "
-    "Hebrew words 'lo barur', and leave subject, grade and publisher empty. NEVER "
-    "invent a name, subject or publisher that is not written in the image.\n"
-    "2) count: count HOW MANY TIMES this exact title text appears on separate visible "
-    "book spines/copies in the image (count the occurrences of the title text). Count "
-    "each distinct physical copy once - do NOT double-count the same book if its title "
-    "shows on both its spine and its cover. Count only what is visible; do not add hidden "
-    "copies. If unsure, give the lower, safe number.\n"
+    "1) Only write text you actually read clearly. If a spine is unreadable or you are unsure of "
+    "the title, put in 'name' only what you are certain of, or the Hebrew words 'lo barur', and "
+    "leave subject, grade and publisher empty. NEVER invent a name, subject or publisher that is "
+    "not written on the book.\n"
+    "2) count: count HOW MANY TIMES this exact title appears on separate visible book spines/copies "
+    "(occurrences of the title text). Count each distinct physical copy once - do not double-count "
+    "the same book if its title shows on both spine and cover, and do not count it again across the "
+    "rotated images. Count only what is visible; if unsure give the lower, safe number.\n"
     "Return ONLY a valid JSON array, no extra text, no code fences, no explanation.\n"
     "Each item keys: \"name\", \"subject\", \"grade\", \"publisher\", \"count\" (number), "
-    "\"notes\" (short or \"\"). All values in Hebrew. \"\" if unknown. If no books, return []."
+    "\"notes\" (short or \"\"). Values in Hebrew, BUT keep each book NAME in the language printed on "
+    "the book itself (English titles stay in English, do not translate). \"\" if unknown. If no books, return []."
 )
 
 def parse_books(text):
@@ -61,22 +63,22 @@ def scan():
     if not OPENAI_API_KEY:
         return jsonify({"error": "missing_key", "msg": "Missing OPENAI_API_KEY in Railway."}), 500
     data = request.get_json(silent=True) or {}
-    b64 = data.get("image", "")
-    if not b64:
+    imgs = data.get("images")
+    if not imgs:
+        one = data.get("image", "")
+        imgs = [one] if one else []
+    imgs = [b for b in imgs if b][:4]
+    if not imgs:
         return jsonify({"error": "no_image"}), 400
-    payload = {
-        "model": MODEL,
-        "max_tokens": 1500,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": PROMPT},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64, "detail": "high"}}
-        ]}]
-    }
+    content = [{"type": "text", "text": PROMPT}]
+    for b in imgs:
+        content.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b, "detail": "high"}})
+    payload = {"model": MODEL, "max_tokens": 1500, "messages": [{"role": "user", "content": content}]}
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": "Bearer " + OPENAI_API_KEY, "Content-Type": "application/json"},
-            json=payload, timeout=90)
+            json=payload, timeout=120)
         if r.status_code != 200:
             print("OPENAI ERROR:", r.status_code, r.text[:500], flush=True)
             return jsonify({"error": "api", "msg": r.text[:300]}), 502
@@ -154,7 +156,7 @@ HTML = r"""<!DOCTYPE html>
   <header>
     <div class="kick">חזרה ללימודים · ספירת מלאי</div>
     <h1>סורק <span class="u">מלאי</span></h1>
-    <p class="sub">צלמו מדף, וה־AI יקרא את הכותרים ויבנה טבלה. אפשר לתקן ידנית ולייצא לאקסל.</p>
+    <p class="sub">צלמו מדף — האפליקציה מסובבת את התמונה לבד וקוראת מכל כיוון. אפשר לתקן ידנית ולייצא לאקסל.</p>
   </header>
 
   <div class="card">
@@ -165,11 +167,11 @@ HTML = r"""<!DOCTYPE html>
     <div class="drop" id="drop" tabindex="0" role="button">
       <div class="ic">📚</div>
       <div class="big">צלמו או בחרו תמונת מדף</div>
-      <div class="small">אפשר כמה תמונות יחד · התמונה תוקטן אוטומטית</div>
+      <div class="small">אפשר כמה תמונות יחד · קוראת ספרים מונחים בכל כיוון</div>
     </div>
     <input type="file" id="file" accept="image/*" multiple capture="environment">
     <div class="queue" id="queue"></div>
-    <div class="note">💡 ה־AI קורא שמות ספרים <b>בכל זווית</b> ולא ממציא — מה שלא קריא יסומן "לא ברור". ה<b>כמות</b> היא שדרות נראות בלבד — לאמת בעין.</div>
+    <div class="note">💡 האפליקציה מסובבת כל תמונה ל-4 כיוונים וקוראת מהברור — כך גם ספרים מונחים על הצד נקראים. מה שלא קריא יסומן "לא ברור". כמות = שדרות נראות, לאמת בעין.</div>
   </div>
 
   <div class="card">
@@ -209,19 +211,37 @@ async function prepareImage(file){
   let bmp,w,h;
   try{bmp=await createImageBitmap(file,{imageOrientation:'from-image'});w=bmp.width;h=bmp.height;}
   catch(e){bmp=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('x'));i.src=URL.createObjectURL(file);});w=bmp.naturalWidth;h=bmp.naturalHeight;}
-  const max=1400,scale=Math.min(1,max/Math.max(w,h)),cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
+  const max=1280,scale=Math.min(1,max/Math.max(w,h)),cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
   const c=document.createElement('canvas');c.width=cw;c.height=ch;c.getContext('2d').drawImage(bmp,0,0,cw,ch);
-  return c.toDataURL('image/jpeg',0.85).split(',')[1];
+  return c.toDataURL('image/jpeg',0.82).split(',')[1];
+}
+function rotateB64(b64,deg){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');
+      if(deg===90||deg===270){c.width=img.height;c.height=img.width;}else{c.width=img.width;c.height=img.height;}
+      const ctx=c.getContext('2d');
+      ctx.translate(c.width/2,c.height/2);
+      ctx.rotate(deg*Math.PI/180);
+      ctx.drawImage(img,-img.width/2,-img.height/2);
+      res(c.toDataURL('image/jpeg',0.82).split(',')[1]);
+    };
+    img.src='data:image/jpeg;base64,'+b64;
+  });
 }
 async function processImage(file){
   const loc=$('#loc').value.trim();
   const item=document.createElement('div');item.className='q-item';
-  item.innerHTML='<div class="spin"></div><div class="name">'+esc(file.name)+'</div>';
+  item.innerHTML='<div class="spin"></div><div class="name">'+esc(file.name)+'</div><span style="font-size:.8rem;color:var(--ink-soft)">מסובב וקורא...</span>';
   queue.prepend(item);
   for(let a=0;a<2;a++){
     try{
-      const b64=await prepareImage(file);
-      const resp=await fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});
+      const b0=await prepareImage(file);
+      const b90=await rotateB64(b0,90);
+      const b180=await rotateB64(b0,180);
+      const b270=await rotateB64(b0,270);
+      const resp=await fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({images:[b0,b90,b180,b270]})});
       const data=await resp.json();
       if(data.error)throw new Error(data.msg||data.error);
       let added=0;
